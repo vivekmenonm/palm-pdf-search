@@ -63,6 +63,3 @@ def retrieve_answer(query):
     end = time.time()
     print("Total time taken:", end-start)
     return result
-
-if __name__ == "__main__":
-    main()
