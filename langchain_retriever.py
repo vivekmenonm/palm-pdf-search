@@ -1,64 +1,68 @@
-from langchain.document_loaders import WebBaseLoader
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain.vectorstores import FAISS
-from langchain.embeddings import VertexAIEmbeddings
-from langchain.llms import VertexAI
-from langchain.document_loaders import PyPDFLoader
-from langchain.chains import RetrievalQA
 import os
 import time
-start = time.time()
+from langchain.document_loaders import PyPDFLoader
+from langchain.vectorstores import FAISS
+from langchain.embeddings import VertexAIEmbeddings
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain.chains import RetrievalQA
+from langchain.llms import VertexAI
 
 DATA_FOLDER = './data'
 
-
-def pdf_loader(data_folder=DATA_FOLDER):
+def load_pdf_documents(data_folder):
     pdf_files = [fn for fn in os.listdir(data_folder) if fn.endswith('.pdf')]
     loaders = [PyPDFLoader(os.path.join(data_folder, fn)) for fn in pdf_files]
     print(f'{len(loaders)} files loaded')
     return loaders
 
-# Load multiple PDF documents using the pdf_loader function
-loaders = pdf_loader()
+def combine_documents(loaders):
+    documents = []
+    for loader in loaders:
+        documents.extend(loader.load())
+    return documents
 
-# Combine the loaded documents from different loaders
-documents = []
-for loader in loaders:
-    documents.extend(loader.load())
+def embed_texts(documents):
+    embeddings = VertexAIEmbeddings()
+    text_splitter = RecursiveCharacterTextSplitter(chunk_size=1500, chunk_overlap=50)
+    texts = text_splitter.split_documents(documents)
+    db = FAISS.from_documents(texts, embeddings)
+    return db
 
-embeddings = VertexAIEmbeddings()
+def initialize_retriever(llm, db):
+    retriever = db.as_retriever()
+    qa = RetrievalQA.from_chain_type(llm=llm, chain_type="stuff", retriever=retriever, return_source_documents=True)
+    return qa
 
-# Get your splitter ready
-text_splitter = RecursiveCharacterTextSplitter(chunk_size=1500, chunk_overlap=50)
+def retrieve_answer(query):
+    start = time.time()
 
-# Split your docs into texts
-texts = text_splitter.split_documents(documents)
-print("embedding....")
-# Embed your texts
-db = FAISS.from_documents(texts, embeddings)
-emb_time = time.time()
-print("embedding took:", emb_time - start)
-db.save_local("engineering_docs")
-# Init your retriever. Asking for just 1 document back
-retriever = db.as_retriever()
-llm = VertexAI(
-    model_name="text-bison@001",
-    project='project-name',
-    temperature=0.9,
-    top_p=0,
-    top_k=1,
-    max_output_tokens=256
-)
+    loaders = load_pdf_documents(DATA_FOLDER)
+    documents = combine_documents(loaders)
+    db = embed_texts(documents)
 
-# We use Vertex PaLM Text API for LLM
-qa = RetrievalQA.from_chain_type(
-    llm=llm, chain_type="stuff", retriever=retriever, return_source_documents=True
-)
+    emb_time = time.time()
+    print("Embedding took:", emb_time - start)
 
-query = "Kolkata office email"
-result = qa({"query": query})
-filtered_metadata = [doc.metadata for doc in result['source_documents']]
-result_value = result['result']
-# print(result_value)
-end = time.time()
-print("Total time taken:", end-start)
+    db.save_local("engineering_docs")
+
+    llm = VertexAI(
+        model_name="text-bison@001",
+        project='project-name',
+        temperature=0.9,
+        top_p=0,
+        top_k=1,
+        max_output_tokens=256
+    )
+
+    qa = initialize_retriever(llm, db)
+
+    result = qa({"query": query})
+    filtered_metadata = [doc.metadata for doc in result['source_documents']]
+    result_value = result['result']
+
+    end = time.time()
+    print("Total time taken:", end-start)
+    return result
+
+if __name__ == "__main__":
+    main()
